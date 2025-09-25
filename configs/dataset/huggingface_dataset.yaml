@@ -1,0 +1,5 @@
+name: ???
+load_method: load_from_disk
+path: ???
+key: ???
+remove_last_line: false

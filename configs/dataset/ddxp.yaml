@@ -1,0 +1,10 @@
+name: ddxp_10k_factorized
+# path: data/all_train_specialty_llama2_70b.jsonl
+# path: data/all_train_specialty_llama2_70b_improved_specialty.jsonl
+# path: data/all_train_specialty_llama2_70b_improved_specialty_redone_facts.jsonl
+path: data/ddxp_factorized_train
+key: context
+remove_last_line: false
+count: ""
+split: train
+split_arg: ${.split}[:${.count}]

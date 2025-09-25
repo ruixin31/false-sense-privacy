@@ -1,0 +1,223 @@
+defaults:
+  - registry
+  - dataset:
+
+name: privacy_metric
+
+seed: 42
+
+debug: false
+
+tasks:
+  transform_dataset: true # sanitize dataset, break down into facts, etc. This might require multiple runs
+  datastore:
+    embedding: false
+    index: false
+  evaluation:
+    privacy: false
+    utility: false
+
+dataset: ???
+
+sanitization:
+  step: sanitize_and_paraphrase-use_gpt
+    # - ???
+    
+
+model:
+  datastore_model: ???
+  lm_model: gpt-4o # LM for evaluation
+
+transform_dataset: # Create documents for datastore
+  method:
+    - facts-baseline # todo: baseline ensure that the key is named facts ---- maybe i should change it to original facts or whatever the paper says, and ig facts-baseline is fine ish for the starting point 
+    - paraphrase_facts
+    - randomize_idx_selection
+
+    - _mod_key-to_context
+
+    - - _next_step_mod_existing
+      - load_idx_selection
+
+    - ${sanitization.step}
+    - facts
+
+    - - establish_and_search_index-use_grit
+      - - privacy_eval-use_fact_privacy
+
+  dataset_in: ${dataset}
+
+  dataset_out:
+    name: ${..exp_name}
+    path: ${..step_folder}/dataset
+    count:
+    key: ${.name}
+    save_as_csv: true
+  additional_identifier: ${model.lm_model}
+  # additional_identifier:
+  exp_base_name: ${.dataset_in.name}${ne:${.additional_identifier}}${ne:${.dataset_in.count}}
+  exp_name: ${method_list2str:${.method}}-${.exp_base_name}
+
+  # steps_base_name: ${.method.0}
+  steps_base_name: ${sanitization.step}
+  exp_folder: exps
+  steps_folder: ${.exp_folder}/${.steps_base_name}-${.exp_base_name}
+  step_folder: ${.steps_folder}/${.exp_name}
+
+  # For testing fact post_process functions
+  # exp_name: facts-sanitize-med_qa_factorized-llama-100
+  skip_ran_pipelines: true
+
+  default_transform_dataset_step: # Create documents for datastore
+    do_not_skip_this_step: false
+    method: ???
+    dataset_in: ???
+    dataset_out:
+      name: ${..exp_name}
+      path: ${..step_folder}/dataset
+      count:
+      key: ${.name}
+      # save_as_csv: true
+    exp_base_name: ???
+    exp_name: ${.method}-${.exp_base_name}
+    steps_folder: ???
+    step_folder: ${.steps_folder}/${.exp_name}
+    force_write: false
+    extra_config: {}
+
+  need_unload_gpt:
+    - mauve
+    - establish_and_search_index-use_grit
+  need_place_last:
+    - mauve
+  need_rerun_post_process:
+  need_rerun:
+  gpt_exps_unique_load_sanitization_only: 
+    enable: false
+
+  # Expose dataset to the codebase
+root_dir: /mmfs1/home/rx31/projects/privacy-pipeline/
+
+dpft_sanitize:
+  model_root_path: /mmfs1/gscratch/sewoong/rx31/projects/dp-transformers/outputs
+  sampling_params:
+    do_sample: True
+    max_length: 512
+  model: ???
+  steps: dpft_sanitize-${.model}
+
+#  I'll opt for doing both at the same time for now. The control flow of
+#  whether skipping is currently controlled by the codebase, not the
+#  config. This is an issue that should get addressed later
+utility_eval:
+  steps:
+    # Also, this is a bit inconsistent with what i have above. i think
+    # underscore should indicate an modifier or variant to the method.
+    - - answer_qa
+      - utility_eval
+
+    - - answer_wildchat_label_distribution
+      - utility_eval
+
+    - - answer_quality
+      - utility_eval
+
+dataset_key_defaults:
+  # For ensuring a dynamic mapping of dataset keys, instead of hard coding
+  original_document: context
+  original_facts: facts
+  matching_cues: _
+  sanitized_document: "[^-]*sanitize"
+  sanitized_facts: "facts-"
+  matching_document: _
+  sanitized_age: ".*_age_responses_2"
+  randomized_idxes: _
+
+# Dynamically allocated by transform_dataset
+current_transform_step: ???
+
+datastore:
+  chunk_size: 512 # chunk size in number of words
+  # dataset_in: ${..transform_dataset.dataset_out}
+  dataset_in:
+    key_start: facts
+  embedding:
+    per_gpu_batch_size: ${model.datastore_model.batch_size}
+    passage_maxlength: ${...datastore.chunk_size}
+    model_name_or_path: ${model.datastore_model.name}
+    no_fp16: False
+    no_title: False
+    lowercase: true
+    normalize_text: true
+    embedding_dir: ${...current_transform_step.step_folder}/embedding
+
+  index:
+    chunk_size: ${...datastore.chunk_size}
+    passages_embeddings: ${...datastore.embedding.embedding_dir}/*.pkl
+    num_subsampled_embedding_files: 1 # Number of subsampled embeddings, use all if pass -1, not supported yet, assume use all embeddings in the dir
+    # index_shard_ids: [[0]]  # idx of passages included in each index; [[0, 1, 2]] means build a single index over psg-0&1&2; [[0], [1,2]] means build 1 index for psg-0 and 1 index for psg-1&2.
+    index_shard_ids: [0] # idx of passages included in each index; [[0, 1, 2]] means build a single index over psg-0&1&2; [[0], [1,2]] means build 1 index for psg-0 and 1 index for psg-1&2.
+    save_or_load_index: True
+    no_fp16: False
+    index_type: PQ # PQ, PQIVF (PQ degrades to flat when n_subquantizers is 0)
+    indexing_batch_size: 1000000
+    projection_size: ${model.datastore_model.hidden_dim}
+    metric: ${model.datastore_model.metric}
+    n_subquantizers: 0 # Number of subquantizer used for vector quantization, if 0 flat index is used
+    n_bits: 64 # Number of bits per subquantizer
+    overwrite: false
+
+evaluation:
+  privacy:
+    samples_key_from_orig: matching_cues # facts for evaluating the original setup: given facts of the original dataset, ... Use subclaims for validation of the sanitized dataset
+    samples_key_from_sanitized: sanitized_facts
+
+  domain: decon_rpj_book
+  search:
+    n_docs: 100
+    per_gpu_batch_size: 64 # Batch size for query encoding
+    question_maxlength: 512 # Maximum number of tokens in a question
+    lowercase: false
+    normalize_text: false
+    overwrite: false # Overwrite the search results if exist
+    merge_multi_index_results: true # Merge the searched results by multiple indices
+  data:
+    eval_data: /gscratch/zlab/rulins/data/perplexity_eval/coarse_domains/redpajama/test/test_books.jsonl
+    max_eval_data_seq_length: 1024
+    eval_stride: 512
+    merge: true
+    num_eval_samples: null # Number of evaluation samples, pass null to evaluate on all samples
+    seed: 310 # Random seed for subsampling
+  concate_k: 0 # Number of retrieved passages for concatenation, 0 means LM-only
+  max_retrieval_len: 1024
+  results_only_log_file: decon_rpj_books_ppl.log
+
+create_fused_cue:
+  str_to_range_map: 
+    lt: "-3:"
+    rd: "rand3"
+    ft: ":3"
+
+    lo: "-1:"
+    ltw: "-2:"
+    lf: "-4:"
+    lfi: "-5:"
+
+range_maps:
+  - "-3:"
+  - ":3"
+  - "rand3"
+
+
+set_alt_job_for_inference: false
+is_cfc: false
+do_precision: false
+is_baseline: false
+
+gpt_exps_unique_load_facts_when_paraphrasing: false
+rand3_idx_override: false
+gpt_only: true
+
+# This signals the release runs: that is, we paraphrase the facts and then
+# randomize the idxes during the pipeline.
+is_v2_run: true
